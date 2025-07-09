@@ -1,5 +1,5 @@
 {
-  "name": "reviewit",
+  "name": "@k-kinzal/reviewit",
   "version": "1.0.0",
   "description": "A code review tool powered by AI",
   "bin": {
@@ -23,6 +23,10 @@
   ],
   "author": "",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k-kinzal/reviewit.git"
