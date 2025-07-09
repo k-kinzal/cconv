@@ -1,6 +1,6 @@
 # reviewit
 
-AI-powered code review tool
+reviewit is your coding standards, made executable.
 
 [![npm version](https://badge.fury.io/js/reviewit.svg)](https://badge.fury.io/js/reviewit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
