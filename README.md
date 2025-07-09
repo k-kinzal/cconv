@@ -13,7 +13,7 @@ AI-powered code review tool
 ## Get started
 
 ```bash
-npm install -g k-kinzal/reviewit
+npm install -g @k-kinzal/reviewit
 ```
 
 ## Usage
