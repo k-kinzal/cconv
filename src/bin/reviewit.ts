@@ -9,11 +9,11 @@ import { reviewCommand } from '../commands/review.js';
 import { fixCommand } from '../commands/fix.js';
 
 program
-  .name('reviewit')
+  .name('cconv')
   .description('AI-powered code review tool')
   .version('1.0.0')
   .option('-v, --verbose', 'Enable verbose output')
-  .option('-c, --config <path>', 'Path to config file (default: .reviewit.yaml)');
+  .option('-c, --config <path>', 'Path to config file (default: .cconv.yaml)');
 
 program
   .command('add [paths...]')

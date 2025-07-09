@@ -1,8 +1,8 @@
-# reviewit
+# cconv
 
-reviewit is your coding standards, made executable.
+cconv is your coding standards, made executable.
 
-[![npm version](https://badge.fury.io/js/reviewit.svg)](https://badge.fury.io/js/reviewit)
+[![npm version](https://badge.fury.io/js/cconv.svg)](https://badge.fury.io/js/cconv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Prerequisites
@@ -13,13 +13,13 @@ reviewit is your coding standards, made executable.
 ## Get started
 
 ```bash
-npm install -g @k-kinzal/reviewit
+npm install -g @k-kinzal/cconv
 ```
 
 ## Usage
 
 ```
-reviewit [options] [command]
+cconv [options] [command]
 
 Options:
   -V, --version                  output the version number
@@ -40,26 +40,26 @@ Commands:
 
 ```bash
 # Add review rules from a documentation file
-reviewit add docs/coding-standards.md
+cconv add docs/coding-standards.md
 
 # Review all TypeScript files in src directory
-reviewit src/**/*.ts
+cconv src/**/*.ts
 
 # Fix issues automatically
-reviewit fix src/**/*.ts
+cconv fix src/**/*.ts
 
 # Use custom concurrency limit for large projects
-reviewit --max-concurrency 10 src/**/*.ts
+cconv --max-concurrency 10 src/**/*.ts
 
 # Retry failed requests up to 5 times
-reviewit --max-retries 5 add docs/
+cconv --max-retries 5 add docs/
 
 # Review git diff (focus on changes only)
-git diff | reviewit
-git diff HEAD~1 | reviewit
-git diff main...feature-branch | reviewit
+git diff | cconv
+git diff HEAD~1 | cconv
+git diff main...feature-branch | cconv
 
-# Configure in .reviewit.yaml
+# Configure in .cconv.yaml
 provider:
   type: claude
   command: /path/to/claude

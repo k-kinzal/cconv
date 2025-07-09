@@ -73,7 +73,7 @@ export async function reviewCommand(paths: string | string[] | undefined, option
     const rules = filterRulesBySeverity(allRules, minSeverity);
     
     if (allRules.length === 0) {
-      console.error(pc.red('Error: No review rules found. Use "reviewit add" to create rules.'));
+      console.error(pc.red('Error: No review rules found. Use "cconv add" to create rules.'));
       process.exit(1);
     }
     

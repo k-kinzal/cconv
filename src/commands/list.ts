@@ -21,7 +21,7 @@ export async function listCommand(options: GlobalOptions = {}): Promise<void> {
     
     // Text format
     if (rules.length === 0) {
-      console.log(pc.yellow('No review rules found. Use "reviewit add" to create rules.'));
+      console.log(pc.yellow('No review rules found. Use "cconv add" to create rules.'));
       return;
     }
     

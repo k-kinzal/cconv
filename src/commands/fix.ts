@@ -51,7 +51,7 @@ export async function fixCommand(paths: string | string[], options: GlobalOption
     }
     
     if (rules.length === 0) {
-      console.error(pc.red('Error: No review rules found. Use "reviewit add" to create rules.'));
+      console.error(pc.red('Error: No review rules found. Use "cconv add" to create rules.'));
       process.exit(1);
     }
     

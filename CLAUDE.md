@@ -24,9 +24,9 @@ npm run lint
 npm test
 
 # Run the CLI directly in development
-npm run reviewit [command] [options]
+npm run cconv [command] [options]
 # OR
-tsx src/bin/reviewit.ts [command] [options]
+tsx src/bin/cconv.ts [command] [options]
 
 # Prepare for publishing (lint, typecheck, build, test)
 npm run prepublishOnly
@@ -34,12 +34,12 @@ npm run prepublishOnly
 
 ## Architecture Overview
 
-reviewit is your coding standards, made executable. It transforms human-readable guidelines, conventions, and best practices into automated validators that can understand context and nuance. By treating your documentation as the source of truth, it creates living rules that evolve with your team's standards. The architecture follows a command-based pattern with clear separation of concerns:
+cconv is your coding standards, made executable. It transforms human-readable guidelines, conventions, and best practices into automated validators that can understand context and nuance. By treating your documentation as the source of truth, it creates living rules that evolve with your team's standards. The architecture follows a command-based pattern with clear separation of concerns:
 
 ### Core Flow
 1. **Commands** (`src/commands/`) - Entry points for CLI operations
 2. **Provider** (`src/services/claude-provider.ts`) - Handles AI communication with retry logic and session management
-3. **Config Management** (`src/services/config-manager.ts`) - Manages `.reviewit.yaml` configuration with schema validation
+3. **Config Management** (`src/services/config-manager.ts`) - Manages `.cconv.yaml` configuration with schema validation
 4. **Output Formatting** (`src/utils/output-formatter.ts`) - Supports multiple output formats (text, JSON, SARIF, reviewdog)
 
 ### Key Architectural Patterns

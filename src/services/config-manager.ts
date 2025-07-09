@@ -11,7 +11,7 @@ export class ConfigManager {
   private config: Config | null = null;
 
   constructor(configFile?: string) {
-    this.configFile = configFile || join(process.cwd(), '.reviewit.yaml');
+    this.configFile = configFile || join(process.cwd(), '.cconv.yaml');
   }
 
   async loadConfig(): Promise<Config> {

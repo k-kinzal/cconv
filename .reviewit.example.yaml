@@ -1,4 +1,4 @@
-# Example reviewit configuration file
+# Example cconv configuration file
 
 # Minimum severity level for review issues
 # Options: critical, error, warning, info
@@ -43,5 +43,5 @@ provider:
   # disallowedTools:
   #   - shell_execute
 
-# Review rules (can be managed with 'reviewit add' command)
+# Review rules (can be managed with 'cconv add' command)
 rules: []

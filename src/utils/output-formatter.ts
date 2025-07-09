@@ -138,14 +138,14 @@ function formatReviewdog(outputData: OutputData): string {
       value: result.ruleId
     },
     source: {
-      name: 'reviewit'
+      name: 'cconv'
     }
   }));
   
   const reviewdogResult: ReviewdogResult = {
     source: {
-      name: 'reviewit',
-      url: 'https://github.com/reviewit'
+      name: 'cconv',
+      url: 'https://github.com/cconv'
     },
     severity: results.some(r => r.severity === 'critical' || r.severity === 'error') ? 'ERROR' : 'WARNING',
     diagnostics
@@ -164,9 +164,9 @@ function formatSarif(outputData: OutputData): string {
   
   const sarifBuilder = new SarifBuilder();
   const sarifRunBuilder = new SarifRunBuilder().initSimple({
-    toolDriverName: "reviewit",
+    toolDriverName: "cconv",
     toolDriverVersion: "1.0.0",
-    url: "https://github.com/reviewit"
+    url: "https://github.com/cconv"
   });
   
   if (results.length === 0) {
