@@ -33,7 +33,8 @@
   "homepage": "https://github.com/k-kinzal/reviewit#readme",
   "files": [
     "dist/**/*",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@types/sarif": "^2.1.7",
