@@ -1,6 +1,6 @@
 {
   "name": "@k-kinzal/cconv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "cconv is your coding standards, made executable",
   "bin": {
     "cconv": "./dist/bin/cconv.js"
