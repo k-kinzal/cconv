@@ -1,0 +1,47 @@
+# Example reviewit configuration file
+
+# Minimum severity level for review issues
+# Options: critical, error, warning, info
+minSeverity: warning
+
+# File patterns to include/exclude
+filePatterns:
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.js"
+  - "**/*.jsx"
+  - "!**/node_modules/**"
+  - "!**/dist/**"
+  - "!**/*.test.ts"
+  - "!**/*.spec.ts"
+
+# Provider configuration
+provider:
+  # Provider type (currently only 'claude' is supported)
+  type: claude
+  
+  # Command to execute (default: 'claude')
+  command: claude
+  
+  # Maximum concurrent operations
+  maxConcurrency: 5
+  
+  # Maximum retries for failed requests
+  maxRetries: 3
+  
+  # Timeout for AI requests in milliseconds (default: 120000 = 2 minutes)
+  # Can be overridden with --timeout option
+  # Minimum: 1ms, Maximum: unlimited
+  timeout: 180000  # 3 minutes
+  
+  # Claude-specific options
+  model: claude-3-opus-20240229
+  # mcpConfig: path/to/mcp/config.json
+  # allowedTools:
+  #   - file_read
+  #   - web_search
+  # disallowedTools:
+  #   - shell_execute
+
+# Review rules (can be managed with 'reviewit add' command)
+rules: []

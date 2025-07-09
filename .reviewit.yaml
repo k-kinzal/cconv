@@ -1,0 +1,105 @@
+provider:
+  type: claude
+  command: /Users/ab/.claude/local/claude
+  maxConcurrency: 5
+  maxRetries: 3
+  timeout: 600000
+  dangerouslySkipPermissions: true
+rules:
+  - id: english-comments-only
+    description: All comments must be written in English to ensure accessibility for
+      international team members and consistency across the codebase
+    severity: error
+    correct: |-
+      // Validates user authentication
+      function validateAuth(token: string): boolean {
+        // Check token expiration
+        return token.exp > Date.now();
+      }
+    incorrect: |-
+      // ユーザー認証を検証する
+      function validateAuth(token: string): boolean {
+        // トークンの有効期限をチェック
+        return token.exp > Date.now();
+      }
+    fix: Replace all non-English comments with their English translations. Use
+      clear, concise English that accurately describes the code's purpose or
+      behavior
+  - id: tsdoc-public-api
+    description: All public functions, classes, and interfaces must include TSDoc
+      comments with proper parameter descriptions and return types
+    severity: warning
+    correct: |-
+      /**
+       * Calculates the total price including tax
+       * @param basePrice - The original price before tax
+       * @param taxRate - Tax rate as a decimal (e.g., 0.08 for 8%)
+       * @returns The total price including tax
+       */
+      function calculateTotalPrice(basePrice: number, taxRate: number): number {
+        return basePrice * (1 + taxRate);
+      }
+    incorrect: |-
+      function calculateTotalPrice(basePrice: number, taxRate: number): number {
+        return basePrice * (1 + taxRate);
+      }
+    fix: Add TSDoc comments above all public functions, classes, and interfaces.
+      Include @param tags for parameters, @returns for return values, and
+      @throws for exceptions
+  - id: no-obvious-comments
+    description: Avoid comments that state the obvious or merely repeat what the
+      code already clearly expresses through naming and structure
+    severity: warning
+    correct: |-
+      function processUserData(userData: UserData): ProcessedData {
+        if (!userData) {
+          return null;
+        }
+        
+        return {
+          id: userData.id,
+          name: userData.name.trim(),
+          email: userData.email.toLowerCase()
+        };
+      }
+    incorrect: |-
+      function processUserData(userData: UserData): ProcessedData {
+        // Check if user data exists
+        if (!userData) {
+          // Return null if no data
+          return null;
+        }
+        
+        // Process the data
+        return {
+          id: userData.id,
+          name: userData.name.trim(), // Trim whitespace
+          email: userData.email.toLowerCase() // Convert to lowercase
+        };
+      }
+    fix: Remove comments that describe what the code is doing when it's already
+      clear from variable names, function names, and code structure. Keep only
+      comments that explain why something is done
+  - id: explain-numeric-values
+    description: Numeric constants, time values, and configuration numbers should
+      have comments explaining their meaning and units
+    severity: info
+    correct: |-
+      const SESSION_TIMEOUT = 60 * 60 * 24; // 1 day in seconds
+      const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
+      const MAX_RETRY_ATTEMPTS = 3; // Based on network timeout studies
+    incorrect: |-
+      const SESSION_TIMEOUT = 86400;
+      const CACHE_DURATION = 300000;
+      const MAX_RETRY_ATTEMPTS = 3;
+    fix: Add comments to numeric constants explaining their units and purpose. For
+      time values, specify the unit (seconds, milliseconds). For other values,
+      explain why that specific number was chosen
+filePatterns:
+  include:
+    - "**/*.ts"
+  exclude:
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/.git/**"
+minSeverity: info

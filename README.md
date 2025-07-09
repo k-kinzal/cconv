@@ -2,6 +2,9 @@
 
 AI-powered code review tool
 
+[![npm version](https://badge.fury.io/js/reviewit.svg)](https://badge.fury.io/js/reviewit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Prerequisites
 
 - Node.js 18+
@@ -62,7 +65,6 @@ provider:
   command: /path/to/claude
   maxConcurrency: 10
   maxRetries: 5
-  claudeOptions:
-    model: sonnet
-    addDir: ["/additional/path"]
+  model: sonnet
+  addDir: ["/additional/path"]
 ```
