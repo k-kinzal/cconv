@@ -23,7 +23,7 @@ export class ProviderFactory {
       maxConcurrency: 5,
       maxRetries: 3,
       timeout: 120000,
-      executionInterval: 10 // Default 10ms between executions
+      executionInterval: 10
     };
 
     // Apply config file settings

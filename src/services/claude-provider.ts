@@ -137,16 +137,12 @@ IMPORTANT: Write your JSON response to the file: ${outputFile}
 Do not output the JSON to stdout. Only write it to the specified file.`;
     const args: string[] = [];
     
-    // Remove JSON output format since we'll use file-based output
-    // args.push('--output-format', 'json');
     args.push('--print')
     
-    // Add resume flag if session ID is provided
     if (sessionId) {
       args.push('--resume', sessionId);
     }
     
-    // Add Claude-specific options
     if (this.config.mcpDebug) {
       args.push('--mcp-debug');
     }
@@ -172,10 +168,8 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
       args.push('--add-dir', ...this.config.addDir);
     }
     
-    // Add prompt last
     args.push(enhancedPrompt);
     
-    // Throttle execution to avoid concurrent issues (before Promise)
     await this.throttleExecution();
     
     return new Promise((resolve, reject) => {
@@ -275,8 +269,7 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
       });
       
       claude.on('exit', () => {
-        // Don't log normal exits
-      });
+        });
 
       claude.on('close', async (code) => {
         clearTimeout(timeout);
@@ -478,7 +471,6 @@ ${content}`;
   }
 
   async reviewFile(filePath: string, content: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    // Define schema for review results
     const ReviewResultSchema = v.object({
       file: v.literal(filePath),
       line: v.pipe(v.number(), v.minValue(1)),
@@ -514,7 +506,6 @@ ${content}`;
   }
 
   async reviewDiff(filePath: string, diffContent: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    // Define schema for review results
     const ReviewResultSchema = v.object({
       file: v.literal(filePath),
       line: v.pipe(v.number(), v.minValue(1)),
