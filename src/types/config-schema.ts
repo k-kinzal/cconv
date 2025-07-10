@@ -42,6 +42,15 @@ export const ProviderConfigSchema = v.object({
     ),
     120000 // Default 120 seconds
   ),
+  executionInterval: v.optional(
+    v.pipe(
+      v.number(),
+      v.integer('Execution interval must be an integer'),
+      v.minValue(0, 'Execution interval must be at least 0ms'),
+      v.maxValue(1000, 'Execution interval cannot exceed 1000ms')
+    ),
+    10 // Default 10ms between executions
+  ),
   // Claude-specific options (when type is 'claude')
   mcpDebug: v.optional(v.boolean()),
   dangerouslySkipPermissions: v.optional(v.boolean()),

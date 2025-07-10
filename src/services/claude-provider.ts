@@ -15,6 +15,11 @@ export class ClaudeProvider implements Provider {
   private config: ProviderConfig;
   private workingDir: string;
   private processCounter = 0;
+  
+  // Static variables for execution throttling
+  private static lastExecutionTime = 0;
+  private static readonly executionQueue: Array<() => void> = [];
+  private static isProcessingQueue = false;
 
   constructor(config: ProviderConfig, globalOptions: GlobalOptions = {}) {
     this.config = config;
@@ -22,6 +27,58 @@ export class ClaudeProvider implements Provider {
     
     if (globalOptions.verbose) {
       enableVerboseLogging();
+    }
+  }
+  
+  /**
+   * Ensure minimum interval between Claude command executions using a queue
+   */
+  private async throttleExecution(): Promise<void> {
+    const minInterval = this.config.executionInterval || 10; // Default 10ms
+    const processId = this.processCounter + 1; // +1 because it will be incremented later
+    
+    return new Promise<void>((resolve) => {
+      ClaudeProvider.executionQueue.push(() => {
+        const now = Date.now();
+        const timeSinceLastExecution = now - ClaudeProvider.lastExecutionTime;
+        
+        if (timeSinceLastExecution < minInterval) {
+          const waitTime = minInterval - timeSinceLastExecution;
+          if (logger.provider.enabled) {
+            const prefix = `[claude-${processId}]`;
+            process.stderr.write(pc.gray(`${prefix} Throttling: waiting ${waitTime}ms before execution\n`));
+          }
+          setTimeout(() => {
+            ClaudeProvider.lastExecutionTime = Date.now();
+            resolve();
+            ClaudeProvider.processNextInQueue();
+          }, waitTime);
+        } else {
+          ClaudeProvider.lastExecutionTime = Date.now();
+          resolve();
+          ClaudeProvider.processNextInQueue();
+        }
+      });
+      
+      if (!ClaudeProvider.isProcessingQueue) {
+        ClaudeProvider.processNextInQueue();
+      }
+    });
+  }
+  
+  /**
+   * Process the next item in the execution queue
+   */
+  private static processNextInQueue(): void {
+    if (ClaudeProvider.executionQueue.length === 0) {
+      ClaudeProvider.isProcessingQueue = false;
+      return;
+    }
+    
+    ClaudeProvider.isProcessingQueue = true;
+    const nextExecution = ClaudeProvider.executionQueue.shift();
+    if (nextExecution) {
+      nextExecution();
     }
   }
 
@@ -118,6 +175,8 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
     // Add prompt last
     args.push(enhancedPrompt);
     
+    // Throttle execution to avoid concurrent issues (before Promise)
+    await this.throttleExecution();
     
     return new Promise((resolve, reject) => {
       let resolved = false;
