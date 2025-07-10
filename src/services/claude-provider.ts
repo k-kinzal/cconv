@@ -1,10 +1,11 @@
 import { spawn } from 'child_process';
 import pc from 'picocolors';
 import { ReviewRule, ReviewResult, Provider, ProviderConfig, FixResult } from '../types/index.js';
-import { FixResultSchema, ReviewRuleSchema, SeverityLevelSchema } from '../types/config-schema.js';
+import { FixResultSchema, ReviewRuleSchema } from '../types/config-schema.js';
 import { GlobalOptions } from '../types/options.js';
 import { logger, enableVerboseLogging } from '../utils/logger.js';
 import * as v from 'valibot';
+import { toJsonSchema } from '@valibot/to-json-schema';
 import { randomUUID } from 'crypto';
 import { mkdir, readFile, unlink } from 'fs/promises';
 import { join } from 'path';
@@ -30,15 +31,15 @@ export class ClaudeProvider implements Provider {
     }
   }
 
-  private async runClaudeWithRetry(prompt: string, sessionId?: string, lastError?: unknown): Promise<string> {
+  private async runClaudeWithRetry<T>(prompt: string, schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>, sessionId?: string, lastError?: unknown): Promise<T> {
     if (sessionId && lastError && !(lastError as Error & { isExecutionError?: boolean }).isExecutionError) {
       // For format errors, send error correction prompt with session ID
       const errorPrompt = this.createErrorCorrectionPrompt(lastError);
-      return this.runClaude(errorPrompt, sessionId);
+      return this.runClaude(errorPrompt, schema, sessionId);
     }
     
     // For execution errors or initial attempts, run without session ID
-    return this.runClaude(prompt);
+    return this.runClaude(prompt, schema);
   }
   
   private createErrorCorrectionPrompt(error: unknown): string {
@@ -58,15 +59,22 @@ export class ClaudeProvider implements Provider {
     return errorMessage;
   }
 
-  private async runClaude(prompt: string, sessionId?: string): Promise<string> {
+  private async runClaude<T>(prompt: string, schema: v.BaseSchema<unknown, T, v.BaseIssue<unknown>>, sessionId?: string): Promise<T> {
     // Ensure working directory exists
     await this.ensureWorkingDir();
     
     // Generate output file path
     const outputFile = join(this.workingDir, `${randomUUID()}.json`);
     
-    // Add output file instruction to prompt
+    // Convert Valibot schema to JSON Schema
+    const jsonSchema = toJsonSchema(schema);
+    
+    // Add output file instruction and JSON Schema to prompt
     const enhancedPrompt = `${prompt}
+
+## JSON Schema for Response
+You must output JSON that conforms to this exact schema:
+${JSON.stringify(jsonSchema, null, 2)}
 
 IMPORTANT: Write your JSON response to the file: ${outputFile}
 Do not output the JSON to stdout. Only write it to the specified file.`;
@@ -247,12 +255,41 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
           try {
             if (existsSync(outputFile)) {
               const fileContent = await readFile(outputFile, 'utf-8');
-              // Clean up the file
-              await unlink(outputFile);
-              if (logger.provider.enabled) {
-                process.stderr.write(pc.gray(`${prefix} Read result from file (${fileContent.length} bytes)\n`));
+              
+              // Validate that the file contains valid JSON
+              try {
+                JSON.parse(fileContent); // Validate JSON format
+                if (logger.provider.enabled) {
+                  process.stderr.write(pc.gray(`${prefix} Read result from file (${fileContent.length} bytes)\n`));
+                  // Debug: Show first 200 chars of the content
+                  const preview = fileContent.length > 200 ? fileContent.substring(0, 200) + '...' : fileContent;
+                  process.stderr.write(pc.gray(`${prefix} File content preview: ${preview}\n`));
+                }
+              } catch (parseErr) {
+                // Clean up the file before rejecting
+                await unlink(outputFile);
+                if (logger.provider.enabled) {
+                  process.stderr.write(pc.red(`${prefix} Failed to parse JSON from file: ${parseErr}\n`));
+                  process.stderr.write(pc.red(`${prefix} File content: ${fileContent}\n`));
+                }
+                reject(new Error(`Invalid JSON in output file: ${parseErr}`));
+                return;
               }
-              resolve(fileContent);
+              
+              // Clean up the file after successful validation
+              await unlink(outputFile);
+              // Parse and validate with the provided schema
+              try {
+                const parsed = JSON.parse(fileContent);
+                const validated = v.parse(schema, parsed);
+                resolve(validated);
+              } catch (validationError) {
+                // Create enhanced error with validation details
+                const error = new Error(`JSON validation failed`) as Error & { response?: string; validationError?: unknown };
+                error.response = fileContent;
+                error.validationError = validationError;
+                reject(error);
+              }
             } else {
               reject(new Error(`Output file not found: ${outputFile}`));
             }
@@ -265,47 +302,10 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
   }
 
   async generateRules(content: string): Promise<ReviewRule[]> {
-    const jsonSchema = {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "description", "severity", "correct", "incorrect", "fix"],
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
-            "description": "Unique identifier in kebab-case"
-          },
-          "description": {
-            "type": "string",
-            "minLength": 20,
-            "description": "Detailed explanation of what this rule checks for"
-          },
-          "severity": {
-            "type": "string",
-            "enum": ["critical", "error", "warning", "info"],
-            "description": "Severity level: critical (security/critical bugs), error (bugs/violations), warning (style/maintainability), info (suggestions)"
-          },
-          "correct": {
-            "type": "string",
-            "minLength": 10,
-            "description": "Complete code example showing correct usage"
-          },
-          "incorrect": {
-            "type": "string",
-            "minLength": 10,
-            "description": "Complete code example showing incorrect usage"
-          },
-          "fix": {
-            "type": "string",
-            "minLength": 20,
-            "description": "Detailed instructions on how to fix violations"
-          }
-        },
-        "additionalProperties": false
-      },
-      "minItems": 1
-    };
+    const ReviewRulesArraySchema = v.pipe(
+      v.array(ReviewRuleSchema),
+      v.minLength(1, 'At least one rule must be generated')
+    );
     
     const prompt = `Analyze the following content and generate review rules in JSON format.
 If the content is a markdown document describing a rule, extract the rule information from it.
@@ -321,9 +321,6 @@ Generate rules with:
 - Concise but clear code examples (max 10-15 lines per example)
 - Clear descriptions (2-3 sentences)
 - Focus on the most important aspects
-
-Output must be a JSON array conforming to this JSON Schema:
-${JSON.stringify(jsonSchema, null, 2)}
 
 SEVERITY GUIDELINES:
 - critical: Security vulnerabilities, critical bugs that could cause data loss or system failures
@@ -353,27 +350,15 @@ ${content}`;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const response = await this.runClaudeWithRetry(prompt, lastSessionId, lastError);
+        const result = await this.runClaudeWithRetry(prompt, ReviewRulesArraySchema, lastSessionId, lastError);
         
-        // Since we're reading from file, the response should be valid JSON
-        try {
-          const ReviewRulesArraySchema = v.pipe(
-            v.array(ReviewRuleSchema),
-            v.minLength(1, 'At least one rule must be generated')
-          );
-          
-          // Parse JSON directly since it's from a file
-          const jsonData = JSON.parse(response);
-          const result = v.parse(ReviewRulesArraySchema, jsonData);
-          
-          return result;
-        } catch (parseError) {
-          // If parsing fails, create an error with the response
-          const error = new Error(`Failed to parse JSON from file`) as Error & { response?: string; validationError?: unknown };
-          error.response = response;
-          error.validationError = parseError;
-          throw error;
+        // Log success if verbose
+        if (logger.provider.enabled && this.processCounter > 0) {
+          const prefix = `[claude-${this.processCounter}]`;
+          process.stderr.write(pc.gray(`${prefix} Successfully generated ${result.length} rules\n`));
         }
+        
+        return result;
       } catch (error) {
         lastError = error;
         
@@ -434,43 +419,17 @@ ${content}`;
   }
 
   async reviewFile(filePath: string, content: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    const jsonSchema = {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["file", "line", "column", "ruleId", "message", "severity"],
-        "properties": {
-          "file": {
-            "type": "string",
-            "const": filePath
-          },
-          "line": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Line number (1-based)"
-          },
-          "column": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Column number (1-based)"
-          },
-          "ruleId": {
-            "type": "string",
-            "const": rule.id
-          },
-          "message": {
-            "type": "string",
-            "description": "Specific violation message"
-          },
-          "severity": {
-            "type": "string",
-            "enum": ["critical", "error", "warning", "info"],
-            "const": rule.severity || 'warning'
-          }
-        },
-        "additionalProperties": false
-      }
-    };
+    // Define schema for review results
+    const ReviewResultSchema = v.object({
+      file: v.literal(filePath),
+      line: v.pipe(v.number(), v.minValue(1)),
+      column: v.pipe(v.number(), v.minValue(1)),
+      ruleId: v.literal(rule.id),
+      message: v.string(),
+      severity: v.literal(rule.severity || 'warning')
+    });
+    
+    const ReviewResultsArraySchema = v.array(ReviewResultSchema);
     
     const prompt = `Review the following file based on this rule:
 
@@ -479,56 +438,34 @@ Description: ${rule.description}
 Correct example: ${rule.correct}
 Incorrect example: ${rule.incorrect}
 
-Find all violations in the file and output as JSON array conforming to this JSON Schema:
-${JSON.stringify(jsonSchema, null, 2)}
-
-If no violations are found, output an empty array: []
+Find all violations in the file. If no violations are found, output an empty array: []
 
 File content:
 ${content}`;
 
-    const response = await this.runClaude(prompt);
-    return this.extractReviewResults(response);
+    const results = await this.runClaude(prompt, ReviewResultsArraySchema);
+    
+    // Log success if verbose
+    if (logger.provider.enabled && this.processCounter > 0) {
+      const prefix = `[claude-${this.processCounter}]`;
+      process.stderr.write(pc.gray(`${prefix} Found ${results.length} violations\n`));
+    }
+    
+    return results;
   }
 
   async reviewDiff(filePath: string, diffContent: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    const jsonSchema = {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["file", "line", "column", "ruleId", "message", "severity"],
-        "properties": {
-          "file": {
-            "type": "string",
-            "const": filePath
-          },
-          "line": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Line number in the new file (1-based)"
-          },
-          "column": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Column number (1-based)"
-          },
-          "ruleId": {
-            "type": "string",
-            "const": rule.id
-          },
-          "message": {
-            "type": "string",
-            "description": "Specific violation message"
-          },
-          "severity": {
-            "type": "string",
-            "enum": ["critical", "error", "warning", "info"],
-            "const": rule.severity || 'warning'
-          }
-        },
-        "additionalProperties": false
-      }
-    };
+    // Define schema for review results
+    const ReviewResultSchema = v.object({
+      file: v.literal(filePath),
+      line: v.pipe(v.number(), v.minValue(1)),
+      column: v.pipe(v.number(), v.minValue(1)),
+      ruleId: v.literal(rule.id),
+      message: v.string(),
+      severity: v.literal(rule.severity || 'warning')
+    });
+    
+    const ReviewResultsArraySchema = v.array(ReviewResultSchema);
     
     const prompt = `Review the following git diff based on this rule:
 
@@ -538,16 +475,20 @@ Correct example: ${rule.correct}
 Incorrect example: ${rule.incorrect}
 
 Focus on the changes (additions and deletions) in the diff.
-Find violations in the modified code and output as JSON array conforming to this JSON Schema:
-${JSON.stringify(jsonSchema, null, 2)}
-
-If no violations are found, output an empty array: []
+Find violations in the modified code. If no violations are found, output an empty array: []
 
 Git diff:
 ${diffContent}`;
 
-    const response = await this.runClaude(prompt);
-    return this.extractReviewResults(response);
+    const results = await this.runClaude(prompt, ReviewResultsArraySchema);
+    
+    // Log success if verbose
+    if (logger.provider.enabled && this.processCounter > 0) {
+      const prefix = `[claude-${this.processCounter}]`;
+      process.stderr.write(pc.gray(`${prefix} Found ${results.length} violations in diff\n`));
+    }
+    
+    return results;
   }
 
   private getLineContext(content: string, lineNumber: number, contextLines: number = 3): { 
@@ -567,54 +508,6 @@ ${diffContent}`;
 
   async fixIssue(filePath: string, content: string, result: ReviewResult, rule: ReviewRule): Promise<FixResult> {
     const context = this.getLineContext(content, result.line);
-    
-    const jsonSchema = {
-      "type": "object",
-      "required": ["success", "description", "startLine", "endLine", "originalContent", "fixedContent", "reasoning", "confidence", "appliedChange"],
-      "properties": {
-        "success": {
-          "type": "boolean",
-          "description": "Whether fix was successful"
-        },
-        "description": {
-          "type": "string",
-          "description": "Brief description of what was fixed"
-        },
-        "startLine": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "First line of the fix (minimum 1)"
-        },
-        "endLine": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Last line of the fix (>= startLine)"
-        },
-        "originalContent": {
-          "type": "string",
-          "description": "Original content that was replaced"
-        },
-        "fixedContent": {
-          "type": "string",
-          "description": "Fixed content to replace with"
-        },
-        "reasoning": {
-          "type": "string",
-          "description": "Explanation of why this fix was applied"
-        },
-        "confidence": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100,
-          "description": "Confidence level (0-100)"
-        },
-        "appliedChange": {
-          "type": "string",
-          "description": "Description of the exact change made"
-        }
-      },
-      "additionalProperties": false
-    };
     
     const prompt = `Fix the following code issue based on the specified rule.
 
@@ -638,11 +531,6 @@ ${result.line}: ${context.targetLine} ← **TARGET LINE**
 ${context.afterLines.map((line, i) => `${result.line + 1 + i}: ${line}`).join('\n')}
 \`\`\`
 
-## JSON Schema for Response
-You must output a JSON object that matches this exact schema:
-
-${JSON.stringify(jsonSchema, null, 2)}
-
 ## Instructions
 1. Analyze the issue in the target line and surrounding context
 2. Apply the rule's fix guidance to resolve the issue
@@ -651,63 +539,20 @@ ${JSON.stringify(jsonSchema, null, 2)}
 5. Explain your reasoning and confidence level
 6. If the issue cannot be fixed, set success to false and explain why`;
 
-    const response = await this.runClaude(prompt);
-    return this.extractFixResult(response);
+    const fixResult = await this.runClaude(prompt, FixResultSchema);
+    
+    // Additional validation: endLine should be >= startLine
+    if (fixResult.endLine < fixResult.startLine) {
+      throw new Error(`End line (${fixResult.endLine}) cannot be less than start line (${fixResult.startLine})`);
+    }
+    
+    // Log success if verbose
+    if (logger.provider.enabled && this.processCounter > 0) {
+      const prefix = `[claude-${this.processCounter}]`;
+      process.stderr.write(pc.gray(`${prefix} Fix result: ${fixResult.success ? 'fix applied' : 'fix skipped'}\n`));
+    }
+    
+    return fixResult;
   }
 
-  private extractFixResult(response: string): FixResult {
-    try {
-      // Parse JSON directly since it's from a file
-      const jsonData = JSON.parse(response);
-      const result = v.parse(FixResultSchema, jsonData);
-      
-      // Additional validation: endLine should be >= startLine
-      if (result.endLine < result.startLine) {
-        throw new Error(`End line (${result.endLine}) cannot be less than start line (${result.startLine})`);
-      }
-      
-      return result;
-    } catch (error) {
-      const errorDetails = `Failed to parse FixResult from file.
-Error: ${error instanceof Error ? error.message : 'Unknown error'}
-Raw response: ${response}`;
-      
-      const enhancedError = new Error(errorDetails) as Error & { validationError?: unknown; response?: string };
-      enhancedError.validationError = error;
-      enhancedError.response = response;
-      throw enhancedError;
-    }
-  }
-  
-  private extractReviewResults(response: string): ReviewResult[] {
-    // Define validation schema for review results
-    const ReviewResultSchema = v.object({
-      file: v.string(),
-      line: v.number(),
-      column: v.number(),
-      ruleId: v.string(),
-      message: v.string(),
-      severity: SeverityLevelSchema
-    });
-    
-    const ReviewResultsArraySchema = v.array(ReviewResultSchema);
-    
-    try {
-      // Parse JSON directly since it's from a file
-      const jsonArray = JSON.parse(response);
-      
-      // Validate the results
-      const validatedResults = v.parse(ReviewResultsArraySchema, jsonArray);
-      return validatedResults;
-    } catch (error) {
-      if (v.isValiError(error)) {
-        console.error('Invalid review result format:', error.message);
-        console.error('Validation issues:', JSON.stringify(error.issues, null, 2));
-      } else {
-        console.error('Error parsing review results:', (error as Error).message);
-      }
-      // Return empty array on error to continue processing
-      return [];
-    }
-  }
 }
