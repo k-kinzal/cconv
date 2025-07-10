@@ -11,6 +11,22 @@ import { mkdir, readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
+// Schema factory functions for reducing duplication
+function createReviewResultSchema(filePath: string, rule: ReviewRule) {
+  return v.object({
+    file: v.literal(filePath),
+    line: v.pipe(v.number(), v.minValue(1)),
+    column: v.pipe(v.number(), v.minValue(1)),
+    ruleId: v.literal(rule.id),
+    message: v.string(),
+    severity: v.literal(rule.severity || 'warning')
+  });
+}
+
+function createReviewResultsArraySchema(filePath: string, rule: ReviewRule) {
+  return v.array(createReviewResultSchema(filePath, rule));
+}
+
 export class ClaudeProvider implements Provider {
   private config: ProviderConfig;
   private workingDir: string;
@@ -83,8 +99,13 @@ export class ClaudeProvider implements Provider {
   }
 
   private async ensureWorkingDir(): Promise<void> {
-    if (!existsSync(this.workingDir)) {
+    try {
       await mkdir(this.workingDir, { recursive: true });
+    } catch (error) {
+      // If directory already exists, ignore the error
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw new Error(`Failed to ensure working directory: ${(error as Error).message}`);
+      }
     }
   }
 
@@ -177,7 +198,7 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
       const timeoutMs = this.config.timeout || 120000; // Default 120 seconds
       const timeoutSec = Math.round(timeoutMs / 1000);
       
-      // プロセスIDを生成
+      // Generate process ID for tracking
       const processId = ++this.processCounter;
       const prefix = `[claude-${processId}]`;
       
@@ -191,19 +212,19 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
         }
       }, timeoutMs);
       
-      // 環境変数 CCONV_CLAUDE_PATH > config.command > 'claude' の優先順位で使用
+      // Command priority: environment variable CCONV_CLAUDE_PATH > config.command > 'claude'
       const command = process.env.CCONV_CLAUDE_PATH || this.config.command || 'claude';
       
-      // 一貫性のため、logger出力もprocess.stderr.writeで直接出力
+      // Use process.stderr.write directly for consistent output
       if (logger.provider.enabled) {
         process.stderr.write(pc.gray(`${prefix} Executing: ${command} ${args.slice(0, -1).join(' ')} [prompt]\n`));
       }
       
       const claude = spawn(command, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: false,  // セキュリティのためshellは使わない
+        shell: false,  // Don't use shell for security reasons
         windowsHide: true,
-        env: { ...process.env },  // 環境変数を全て受け継ぐ
+        env: { ...process.env },  // Inherit all environment variables
         detached: false
       });
       
@@ -225,12 +246,12 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
         buffer += chunk;
         const lines = buffer.split('\n');
         
-        // 最後の要素は次のチャンクに繋がる可能性があるので保持
+        // Keep last element as it might be incomplete and continue to next chunk
         const incomplete = lines.pop() || '';
         
-        // 完全な行をすぐに出力
+        // Output complete lines immediately
         lines.forEach(line => {
-          // 空行も含めて全ての行を出力
+          // Output all lines including empty ones
           process.stderr.write(color(`${prefix} ${line}\n`));
         });
         
@@ -277,7 +298,7 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
         
         // Process any remaining buffered output
         if (logger.provider.enabled) {
-          // 残っているバッファがあれば出力（改行なし）
+          // Output any remaining buffered content (without newline)
           if (stdoutBuffer) {
             process.stderr.write(pc.gray(`${prefix} ${stdoutBuffer}\n`));
           }
@@ -471,16 +492,7 @@ ${content}`;
   }
 
   async reviewFile(filePath: string, content: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    const ReviewResultSchema = v.object({
-      file: v.literal(filePath),
-      line: v.pipe(v.number(), v.minValue(1)),
-      column: v.pipe(v.number(), v.minValue(1)),
-      ruleId: v.literal(rule.id),
-      message: v.string(),
-      severity: v.literal(rule.severity || 'warning')
-    });
-    
-    const ReviewResultsArraySchema = v.array(ReviewResultSchema);
+    const ReviewResultsArraySchema = createReviewResultsArraySchema(filePath, rule);
     
     const prompt = `Review the following file based on this rule:
 
@@ -506,16 +518,7 @@ ${content}`;
   }
 
   async reviewDiff(filePath: string, diffContent: string, rule: ReviewRule): Promise<ReviewResult[]> {
-    const ReviewResultSchema = v.object({
-      file: v.literal(filePath),
-      line: v.pipe(v.number(), v.minValue(1)),
-      column: v.pipe(v.number(), v.minValue(1)),
-      ruleId: v.literal(rule.id),
-      message: v.string(),
-      severity: v.literal(rule.severity || 'warning')
-    });
-    
-    const ReviewResultsArraySchema = v.array(ReviewResultSchema);
+    const ReviewResultsArraySchema = createReviewResultsArraySchema(filePath, rule);
     
     const prompt = `Review the following git diff based on this rule:
 
