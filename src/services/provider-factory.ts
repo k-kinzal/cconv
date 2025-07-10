@@ -22,7 +22,8 @@ export class ProviderFactory {
       command: 'claude',
       maxConcurrency: 5,
       maxRetries: 3,
-      timeout: 120000 // Default 120 seconds
+      timeout: 120000,
+      executionInterval: 10
     };
 
     // Apply config file settings
