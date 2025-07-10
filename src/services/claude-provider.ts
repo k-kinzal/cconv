@@ -4,17 +4,29 @@ import { ReviewRule, ReviewResult, Provider, ProviderConfig, FixResult } from '.
 import { FixResultSchema, ReviewRuleSchema, SeverityLevelSchema } from '../types/config-schema.js';
 import { GlobalOptions } from '../types/options.js';
 import { logger, enableVerboseLogging } from '../utils/logger.js';
-import { extractJsonFromResponse } from '../utils/extract-json.js';
 import * as v from 'valibot';
+import { randomUUID } from 'crypto';
+import { mkdir, readFile, unlink } from 'fs/promises';
+import { join } from 'path';
+import { existsSync } from 'fs';
 
 export class ClaudeProvider implements Provider {
   private config: ProviderConfig;
+  private workingDir: string;
+  private processCounter = 0;
 
   constructor(config: ProviderConfig, globalOptions: GlobalOptions = {}) {
     this.config = config;
+    this.workingDir = join(process.cwd(), '.cconv', 'working');
     
     if (globalOptions.verbose) {
       enableVerboseLogging();
+    }
+  }
+
+  private async ensureWorkingDir(): Promise<void> {
+    if (!existsSync(this.workingDir)) {
+      await mkdir(this.workingDir, { recursive: true });
     }
   }
 
@@ -41,16 +53,28 @@ export class ClaudeProvider implements Provider {
       errorMessage += typedError.message + '\n';
     }
     
-    errorMessage += '\nPlease provide a valid JSON array that conforms to the schema. Return ONLY the JSON array, no additional text.';
+    errorMessage += '\nPlease provide a valid JSON array that conforms to the schema.';
     
     return errorMessage;
   }
 
   private async runClaude(prompt: string, sessionId?: string): Promise<string> {
+    // Ensure working directory exists
+    await this.ensureWorkingDir();
+    
+    // Generate output file path
+    const outputFile = join(this.workingDir, `${randomUUID()}.json`);
+    
+    // Add output file instruction to prompt
+    const enhancedPrompt = `${prompt}
+
+IMPORTANT: Write your JSON response to the file: ${outputFile}
+Do not output the JSON to stdout. Only write it to the specified file.`;
     const args: string[] = [];
     
-    // Always use JSON output format for structured responses
-    args.push('--output-format', 'json');
+    // Remove JSON output format since we'll use file-based output
+    // args.push('--output-format', 'json');
+    args.push('--print')
     
     // Add resume flag if session ID is provided
     if (sessionId) {
@@ -84,28 +108,41 @@ export class ClaudeProvider implements Provider {
     }
     
     // Add prompt last
-    args.push(prompt);
+    args.push(enhancedPrompt);
     
-    logger.provider.verbose('Executing: %s %s', this.config.command || 'claude', args.slice(0, -1).join(' ') + ' [prompt]');
     
     return new Promise((resolve, reject) => {
       let resolved = false;
       const timeoutMs = this.config.timeout || 120000; // Default 120 seconds
       const timeoutSec = Math.round(timeoutMs / 1000);
       
+      // プロセスIDを生成
+      const processId = ++this.processCounter;
+      const prefix = `[claude-${processId}]`;
+      
       const timeout = setTimeout(() => {
         if (!resolved) {
-          logger.provider.verbose(`Command timed out after ${timeoutSec} seconds`);
+          if (logger.provider.enabled) {
+            process.stderr.write(pc.gray(`${prefix} Command timed out after ${timeoutSec} seconds\n`));
+          }
           claude.kill('SIGTERM');
           reject(new Error(`Claude command timed out after ${timeoutSec} seconds`));
         }
       }, timeoutMs);
       
-      const claude = spawn(this.config.command || 'claude', args, {
-        stdio: ['ignore', 'pipe', 'pipe'],  // stdin を ignore に変更
-        shell: false,
+      // 環境変数 CCONV_CLAUDE_PATH > config.command > 'claude' の優先順位で使用
+      const command = process.env.CCONV_CLAUDE_PATH || this.config.command || 'claude';
+      
+      // 一貫性のため、logger出力もprocess.stderr.writeで直接出力
+      if (logger.provider.enabled) {
+        process.stderr.write(pc.gray(`${prefix} Executing: ${command} ${args.slice(0, -1).join(' ')} [prompt]\n`));
+      }
+      
+      const claude = spawn(command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,  // セキュリティのためshellは使わない
         windowsHide: true,
-        env: { ...process.env },
+        env: { ...process.env },  // 環境変数を全て受け継ぐ
         detached: false
       });
       
@@ -118,32 +155,32 @@ export class ClaudeProvider implements Provider {
       // Increase the buffer size for stdout to handle large responses
       claude.stdout.setMaxListeners(0);
 
-      let output = '';
       let error = '';
-      const stdoutBuffer: string[] = [];
+      let stdoutBuffer = '';
+      let stderrBuffer = '';
+
+      // Helper function to process and output lines with prefix
+      const processLines = (buffer: string, chunk: string, color: (str: string) => string): string => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        
+        // 最後の要素は次のチャンクに繋がる可能性があるので保持
+        const incomplete = lines.pop() || '';
+        
+        // 完全な行をすぐに出力
+        lines.forEach(line => {
+          // 空行も含めて全ての行を出力
+          process.stderr.write(color(`${prefix} ${line}\n`));
+        });
+        
+        return incomplete;
+      };
 
       claude.stdout.on('data', (chunk) => {
-        // Collect stdout separately from debug output
-        stdoutBuffer.push(chunk);
-        
-        // When verbose is enabled, show Claude's debug output in real-time
+        // When verbose is enabled, show all stdout in real-time with prefix
         if (logger.provider.enabled) {
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('[DEBUG]') || 
-                line.startsWith('[INFO]') || 
-                line.startsWith('[WARNING]') || 
-                line.startsWith('[ERROR]')) {
-              // Show Claude's debug output in gray
-              process.stderr.write(pc.gray(line) + '\n');
-            }
-          }
+          stdoutBuffer = processLines(stdoutBuffer, chunk, pc.gray);
         }
-      });
-      
-      claude.stdout.on('end', () => {
-        // Combine all stdout chunks
-        output = stdoutBuffer.join('');
       });
 
       claude.stderr.on('data', (chunk) => {
@@ -151,41 +188,125 @@ export class ClaudeProvider implements Provider {
         
         // Show claude's stderr output when in verbose mode
         if (logger.provider.enabled) {
-          // Pass through Claude's stderr in gray
-          process.stderr.write(pc.gray(chunk));
+          stderrBuffer = processLines(stderrBuffer, chunk, pc.red);
         }
       });
 
       claude.on('error', (err) => {
-        logger.provider.verbose('Process error: %s', err.message);
-        reject(err);
+        if (logger.provider.enabled) {
+          process.stderr.write(pc.gray(`${prefix} Process error: ${err.message}\n`));
+        }
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          const errorMsg = `Command '${command}' not found. Please ensure Claude CLI is installed and in your PATH.`;
+          if (logger.provider.enabled) {
+            process.stderr.write(pc.gray(`${prefix} ${errorMsg}\n`));
+          }
+          reject(new Error(errorMsg));
+        } else {
+          reject(err);
+        }
       });
       
       claude.on('exit', () => {
         // Don't log normal exits
       });
 
-      claude.on('close', (code) => {
+      claude.on('close', async (code) => {
         clearTimeout(timeout);
         resolved = true;
         
+        // Process any remaining buffered output
+        if (logger.provider.enabled) {
+          // 残っているバッファがあれば出力（改行なし）
+          if (stdoutBuffer) {
+            process.stderr.write(pc.gray(`${prefix} ${stdoutBuffer}\n`));
+          }
+          if (stderrBuffer) {
+            process.stderr.write(pc.red(`${prefix} ${stderrBuffer}\n`));
+          }
+        }
+        
         if (code !== 0) {
-          logger.provider.verbose('Process failed (exit code: %d)', code);
+          if (logger.provider.enabled) {
+            process.stderr.write(pc.gray(`${prefix} Process failed (exit code: ${code})\n`));
+          }
           if (error) {
-            console.error('Claude stderr:', error);
+            console.error(`${prefix} Claude stderr:`, error);
+          }
+          // Clean up output file if it exists
+          try {
+            if (existsSync(outputFile)) {
+              await unlink(outputFile);
+            }
+          } catch {
+            // Ignore cleanup errors
           }
           reject(new Error(`Claude process exited with code ${code}: ${error}`));
         } else {
-          if (output.length > 0) {
-            logger.provider.verbose('Response received (%d bytes)', output.length);
+          // Read the output file
+          try {
+            if (existsSync(outputFile)) {
+              const fileContent = await readFile(outputFile, 'utf-8');
+              // Clean up the file
+              await unlink(outputFile);
+              if (logger.provider.enabled) {
+                process.stderr.write(pc.gray(`${prefix} Read result from file (${fileContent.length} bytes)\n`));
+              }
+              resolve(fileContent);
+            } else {
+              reject(new Error(`Output file not found: ${outputFile}`));
+            }
+          } catch (err) {
+            reject(new Error(`Failed to read output file: ${err}`));
           }
-          resolve(output);
         }
       });
     });
   }
 
   async generateRules(content: string): Promise<ReviewRule[]> {
+    const jsonSchema = {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "severity", "correct", "incorrect", "fix"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "description": "Unique identifier in kebab-case"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 20,
+            "description": "Detailed explanation of what this rule checks for"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "error", "warning", "info"],
+            "description": "Severity level: critical (security/critical bugs), error (bugs/violations), warning (style/maintainability), info (suggestions)"
+          },
+          "correct": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Complete code example showing correct usage"
+          },
+          "incorrect": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Complete code example showing incorrect usage"
+          },
+          "fix": {
+            "type": "string",
+            "minLength": 20,
+            "description": "Detailed instructions on how to fix violations"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    };
+    
     const prompt = `Analyze the following content and generate review rules in JSON format.
 If the content is a markdown document describing a rule, extract the rule information from it.
 If the content is code, analyze it to generate appropriate rules.
@@ -202,49 +323,7 @@ Generate rules with:
 - Focus on the most important aspects
 
 Output must be a JSON array conforming to this JSON Schema:
-{
-  "type": "array",
-  "items": {
-    "type": "object",
-    "required": ["id", "description", "severity", "correct", "incorrect", "fix"],
-    "properties": {
-      "id": {
-        "type": "string",
-        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
-        "description": "Unique identifier in kebab-case"
-      },
-      "description": {
-        "type": "string",
-        "minLength": 20,
-        "description": "Detailed explanation of what this rule checks for"
-      },
-      "severity": {
-        "type": "string",
-        "enum": ["critical", "error", "warning", "info"],
-        "description": "Severity level: critical (security/critical bugs), error (bugs/violations), warning (style/maintainability), info (suggestions)"
-      },
-      "correct": {
-        "type": "string",
-        "minLength": 10,
-        "description": "Complete code example showing correct usage"
-      },
-      "incorrect": {
-        "type": "string",
-        "minLength": 10,
-        "description": "Complete code example showing incorrect usage"
-      },
-      "fix": {
-        "type": "string",
-        "minLength": 20,
-        "description": "Detailed instructions on how to fix violations"
-      }
-    },
-    "additionalProperties": false
-  },
-  "minItems": 1
-}
-
-Return ONLY a raw JSON array with no additional text, no markdown formatting, and no code blocks.
+${JSON.stringify(jsonSchema, null, 2)}
 
 SEVERITY GUIDELINES:
 - critical: Security vulnerabilities, critical bugs that could cause data loss or system failures
@@ -275,14 +354,26 @@ ${content}`;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const response = await this.runClaudeWithRetry(prompt, lastSessionId, lastError);
-        const ReviewRulesArraySchema = v.pipe(
-          v.array(ReviewRuleSchema),
-          v.minLength(1, 'At least one rule must be generated')
-        );
-        const result = extractJsonFromResponse(response, ReviewRulesArraySchema);
         
-        // If we got here, extraction was successful
-        return result;
+        // Since we're reading from file, the response should be valid JSON
+        try {
+          const ReviewRulesArraySchema = v.pipe(
+            v.array(ReviewRuleSchema),
+            v.minLength(1, 'At least one rule must be generated')
+          );
+          
+          // Parse JSON directly since it's from a file
+          const jsonData = JSON.parse(response);
+          const result = v.parse(ReviewRulesArraySchema, jsonData);
+          
+          return result;
+        } catch (parseError) {
+          // If parsing fails, create an error with the response
+          const error = new Error(`Failed to parse JSON from file`) as Error & { response?: string; validationError?: unknown };
+          error.response = response;
+          error.validationError = parseError;
+          throw error;
+        }
       } catch (error) {
         lastError = error;
         
@@ -343,6 +434,44 @@ ${content}`;
   }
 
   async reviewFile(filePath: string, content: string, rule: ReviewRule): Promise<ReviewResult[]> {
+    const jsonSchema = {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "line", "column", "ruleId", "message", "severity"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "const": filePath
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Line number (1-based)"
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Column number (1-based)"
+          },
+          "ruleId": {
+            "type": "string",
+            "const": rule.id
+          },
+          "message": {
+            "type": "string",
+            "description": "Specific violation message"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "error", "warning", "info"],
+            "const": rule.severity || 'warning'
+          }
+        },
+        "additionalProperties": false
+      }
+    };
+    
     const prompt = `Review the following file based on this rule:
 
 Rule ID: ${rule.id}
@@ -350,26 +479,57 @@ Description: ${rule.description}
 Correct example: ${rule.correct}
 Incorrect example: ${rule.incorrect}
 
-Find all violations in the file and output as JSON array with:
-- file: "${filePath}"
-- line: line number (1-based)
-- column: column number (1-based)
-- ruleId: "${rule.id}"
-- message: specific violation message
-- severity: "${rule.severity || 'warning'}" (use this exact severity level)
+Find all violations in the file and output as JSON array conforming to this JSON Schema:
+${JSON.stringify(jsonSchema, null, 2)}
 
-If no violations are found, return an empty array: []
+If no violations are found, output an empty array: []
 
 File content:
-${content}
-
-Output only valid JSON array.`;
+${content}`;
 
     const response = await this.runClaude(prompt);
     return this.extractReviewResults(response);
   }
 
   async reviewDiff(filePath: string, diffContent: string, rule: ReviewRule): Promise<ReviewResult[]> {
+    const jsonSchema = {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "line", "column", "ruleId", "message", "severity"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "const": filePath
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Line number in the new file (1-based)"
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Column number (1-based)"
+          },
+          "ruleId": {
+            "type": "string",
+            "const": rule.id
+          },
+          "message": {
+            "type": "string",
+            "description": "Specific violation message"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "error", "warning", "info"],
+            "const": rule.severity || 'warning'
+          }
+        },
+        "additionalProperties": false
+      }
+    };
+    
     const prompt = `Review the following git diff based on this rule:
 
 Rule ID: ${rule.id}
@@ -378,20 +538,13 @@ Correct example: ${rule.correct}
 Incorrect example: ${rule.incorrect}
 
 Focus on the changes (additions and deletions) in the diff.
-Find violations in the modified code and output as JSON array with:
-- file: "${filePath}"
-- line: line number in the new file (1-based)
-- column: column number (1-based)
-- ruleId: "${rule.id}"
-- message: specific violation message
-- severity: "${rule.severity || 'warning'}" (use this exact severity level)
+Find violations in the modified code and output as JSON array conforming to this JSON Schema:
+${JSON.stringify(jsonSchema, null, 2)}
 
-If no violations are found, return an empty array: []
+If no violations are found, output an empty array: []
 
 Git diff:
-${diffContent}
-
-Output only valid JSON array.`;
+${diffContent}`;
 
     const response = await this.runClaude(prompt);
     return this.extractReviewResults(response);
@@ -414,6 +567,54 @@ Output only valid JSON array.`;
 
   async fixIssue(filePath: string, content: string, result: ReviewResult, rule: ReviewRule): Promise<FixResult> {
     const context = this.getLineContext(content, result.line);
+    
+    const jsonSchema = {
+      "type": "object",
+      "required": ["success", "description", "startLine", "endLine", "originalContent", "fixedContent", "reasoning", "confidence", "appliedChange"],
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "description": "Whether fix was successful"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief description of what was fixed"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "First line of the fix (minimum 1)"
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Last line of the fix (>= startLine)"
+        },
+        "originalContent": {
+          "type": "string",
+          "description": "Original content that was replaced"
+        },
+        "fixedContent": {
+          "type": "string",
+          "description": "Fixed content to replace with"
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Explanation of why this fix was applied"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Confidence level (0-100)"
+        },
+        "appliedChange": {
+          "type": "string",
+          "description": "Description of the exact change made"
+        }
+      },
+      "additionalProperties": false
+    };
     
     const prompt = `Fix the following code issue based on the specified rule.
 
@@ -438,21 +639,9 @@ ${context.afterLines.map((line, i) => `${result.line + 1 + i}: ${line}`).join('\
 \`\`\`
 
 ## JSON Schema for Response
-You must respond with a JSON object that matches this exact schema:
+You must output a JSON object that matches this exact schema:
 
-\`\`\`json
-{
-  "success": boolean,           // Whether fix was successful
-  "description": "string",      // Brief description of what was fixed
-  "startLine": number,          // First line of the fix (minimum 1)
-  "endLine": number,            // Last line of the fix (>= startLine)
-  "originalContent": "string",  // Original content that was replaced
-  "fixedContent": "string",     // Fixed content to replace with
-  "reasoning": "string",        // Explanation of why this fix was applied
-  "confidence": number,         // Confidence level (0-100)
-  "appliedChange": "string"     // Description of the exact change made
-}
-\`\`\`
+${JSON.stringify(jsonSchema, null, 2)}
 
 ## Instructions
 1. Analyze the issue in the target line and surrounding context
@@ -460,9 +649,7 @@ You must respond with a JSON object that matches this exact schema:
 3. Determine the exact line range that needs to be modified
 4. Provide the original content and fixed content for that range
 5. Explain your reasoning and confidence level
-6. If the issue cannot be fixed, set success to false and explain why
-
-Output only valid JSON matching the schema above.`;
+6. If the issue cannot be fixed, set success to false and explain why`;
 
     const response = await this.runClaude(prompt);
     return this.extractFixResult(response);
@@ -470,7 +657,9 @@ Output only valid JSON matching the schema above.`;
 
   private extractFixResult(response: string): FixResult {
     try {
-      const result = extractJsonFromResponse(response, FixResultSchema);
+      // Parse JSON directly since it's from a file
+      const jsonData = JSON.parse(response);
+      const result = v.parse(FixResultSchema, jsonData);
       
       // Additional validation: endLine should be >= startLine
       if (result.endLine < result.startLine) {
@@ -479,7 +668,7 @@ Output only valid JSON matching the schema above.`;
       
       return result;
     } catch (error) {
-      const errorDetails = `Failed to parse FixResult from Claude response.
+      const errorDetails = `Failed to parse FixResult from file.
 Error: ${error instanceof Error ? error.message : 'Unknown error'}
 Raw response: ${response}`;
       
@@ -504,62 +693,8 @@ Raw response: ${response}`;
     const ReviewResultsArraySchema = v.array(ReviewResultSchema);
     
     try {
-      // First, extract the JSON from the response
-      const lines = response.split('\n');
-      const nonDebugLines = lines.filter(line => {
-        const trimmed = line.trim();
-        return trimmed !== '' &&
-               !trimmed.startsWith('[DEBUG]') && 
-               !trimmed.startsWith('[INFO]') &&
-               !trimmed.startsWith('[WARNING]') &&
-               !trimmed.startsWith('[ERROR]');
-      });
-      
-      // Parse the result object
-      let resultObject = null;
-      for (const line of nonDebugLines) {
-        try {
-          const obj = JSON.parse(line);
-          if (obj.type === 'result') {
-            resultObject = obj;
-            break;
-          }
-        } catch {
-          // Continue to next line
-        }
-      }
-      
-      if (!resultObject) {
-        throw new Error('Could not find result object in response');
-      }
-      
-      // Extract the content
-      const content = resultObject.result || resultObject.content || resultObject.response || '';
-      
-      // Try to parse JSON from content
-      let jsonArray;
-      if (typeof content === 'string') {
-        // Remove markdown code blocks if present
-        const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        const jsonContent = codeBlockMatch ? codeBlockMatch[1] : content;
-        
-        try {
-          jsonArray = JSON.parse(jsonContent.trim());
-        } catch {
-          // Try to extract JSON array from the content
-          const arrayMatch = jsonContent.match(/\[\s*(?:\{[^}]*\}(?:,\s*)?)*\s*\]/);
-          if (arrayMatch) {
-            jsonArray = JSON.parse(arrayMatch[0]);
-          } else {
-            // If we can't find JSON, assume no violations
-            jsonArray = [];
-          }
-        }
-      } else if (Array.isArray(content)) {
-        jsonArray = content;
-      } else {
-        jsonArray = [];
-      }
+      // Parse JSON directly since it's from a file
+      const jsonArray = JSON.parse(response);
       
       // Validate the results
       const validatedResults = v.parse(ReviewResultsArraySchema, jsonArray);
@@ -569,7 +704,7 @@ Raw response: ${response}`;
         console.error('Invalid review result format:', error.message);
         console.error('Validation issues:', JSON.stringify(error.issues, null, 2));
       } else {
-        console.error('Error extracting review results:', (error as Error).message);
+        console.error('Error parsing review results:', (error as Error).message);
       }
       // Return empty array on error to continue processing
       return [];
