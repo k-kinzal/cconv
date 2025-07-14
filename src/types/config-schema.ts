@@ -40,7 +40,16 @@ export const ProviderConfigSchema = v.object({
       v.integer('Timeout must be an integer'),
       v.minValue(1, 'Timeout must be at least 1ms')
     ),
-    120000 // Default 120 seconds
+    120000
+  ),
+  executionInterval: v.optional(
+    v.pipe(
+      v.number(),
+      v.integer('Execution interval must be an integer'),
+      v.minValue(0, 'Execution interval must be at least 0ms'),
+      v.maxValue(1000, 'Execution interval cannot exceed 1000ms')
+    ),
+    10
   ),
   // Claude-specific options (when type is 'claude')
   mcpDebug: v.optional(v.boolean()),

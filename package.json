@@ -2,46 +2,44 @@
   "name": "@k-kinzal/cconv",
   "version": "0.1.2",
   "description": "cconv is your coding standards, made executable",
-  "bin": {
-    "cconv": "./dist/bin/cconv.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "dev": "tsx watch src/bin/cconv.ts",
-    "start": "tsx src/bin/cconv.ts",
-    "cconv": "tsx src/bin/cconv.ts",
-    "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm run test"
-  },
   "keywords": [
     "review",
     "code-review",
     "cli",
     "ai"
   ],
-  "author": "",
-  "license": "MIT",
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/",
-    "access": "public"
+  "homepage": "https://github.com/k-kinzal/cconv#readme",
+  "bugs": {
+    "url": "https://github.com/k-kinzal/cconv/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k-kinzal/cconv.git"
   },
-  "bugs": {
-    "url": "https://github.com/k-kinzal/cconv/issues"
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "bin": {
+    "cconv": "./dist/bin/cconv.js"
   },
-  "homepage": "https://github.com/k-kinzal/cconv#readme",
   "files": [
     "dist/**/*",
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "build": "tsc || exit 2",
+    "cconv": "tsx src/bin/cconv.ts",
+    "dev": "tsx watch src/bin/cconv.ts",
+    "lint": "eslint . --ext .ts >&2 || exit 2",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm run test",
+    "start": "tsx src/bin/cconv.ts",
+    "test": "jest || exit 2",
+    "typecheck": "tsc --noEmit || exit 2"
+  },
   "dependencies": {
     "@types/sarif": "^2.1.7",
+    "@valibot/to-json-schema": "^1.3.0",
     "commander": "^12.1.0",
     "glob": "^11.0.0",
     "minimatch": "^10.0.3",
@@ -49,7 +47,7 @@
     "p-limit": "^6.1.0",
     "parse-git-diff": "^0.0.19",
     "picocolors": "^1.1.1",
-    "valibot": "^0.31.1",
+    "valibot": "^1.1.0",
     "yaml": "^2.6.1"
   },
   "devDependencies": {
@@ -62,8 +60,11 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.36.0"
   },
-  "type": "module",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

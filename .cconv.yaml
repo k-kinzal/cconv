@@ -1,6 +1,5 @@
 provider:
   type: claude
-  command: /Users/ab/.claude/local/claude
   maxConcurrency: 5
   maxRetries: 3
   timeout: 600000
