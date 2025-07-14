@@ -7,9 +7,8 @@ import { logger, enableVerboseLogging } from '../utils/logger.js';
 import * as v from 'valibot';
 import { toJsonSchema } from '@valibot/to-json-schema';
 import { randomUUID } from 'crypto';
-import { mkdir, readFile, unlink } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { existsSync } from 'fs';
 
 // Schema factory functions for reducing duplication
 function createReviewResultSchema(filePath: string, rule: ReviewRule) {
@@ -314,20 +313,12 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
           if (error) {
             console.error(`${prefix} Claude stderr:`, error);
           }
-          // Clean up output file if it exists
-          try {
-            if (existsSync(outputFile)) {
-              await unlink(outputFile);
-            }
-          } catch {
-            // Ignore cleanup errors
-          }
+          // Output file is intentionally not cleaned up
           reject(new Error(`Claude process exited with code ${code}: ${error}`));
         } else {
           // Read the output file
           try {
-            if (existsSync(outputFile)) {
-              const fileContent = await readFile(outputFile, 'utf-8');
+            const fileContent = await readFile(outputFile, 'utf-8');
               
               // Validate that the file contains valid JSON
               try {
@@ -339,8 +330,6 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
                   process.stderr.write(pc.gray(`${prefix} File content preview: ${preview}\n`));
                 }
               } catch (parseErr) {
-                // Clean up the file before rejecting
-                await unlink(outputFile);
                 if (logger.provider.enabled) {
                   process.stderr.write(pc.red(`${prefix} Failed to parse JSON from file: ${parseErr}\n`));
                   process.stderr.write(pc.red(`${prefix} File content: ${fileContent}\n`));
@@ -349,8 +338,6 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
                 return;
               }
               
-              // Clean up the file after successful validation
-              await unlink(outputFile);
               // Parse and validate with the provided schema
               try {
                 const parsed = JSON.parse(fileContent);
@@ -363,9 +350,6 @@ Do not output the JSON to stdout. Only write it to the specified file.`;
                 error.validationError = validationError;
                 reject(error);
               }
-            } else {
-              reject(new Error(`Output file not found: ${outputFile}`));
-            }
           } catch (err) {
             reject(new Error(`Failed to read output file: ${err}`));
           }
